@@ -1,16 +1,17 @@
 import type { ExternalPluginConfig } from '@windy/interfaces';
 
 const config: ExternalPluginConfig = {
-    name: 'windy-plugin-my-plugin',
+    name: 'windy-plugin-aqms-id',
     version: '0.1.0',
-    icon: '🔌',
-    title: 'This is my first plugin',
-    description: 'This is my first plugin.',
-    author: 'John Doe (optional company name)',
-    repository: 'https://github.com/windycom/windy-plugin-template',
+    icon: '💨',
+    title: 'Indonesia AQMS Stations',
+    description: 'Windy.com plugin for AQMS stations in Indonesia',
+    author: 'Azri Sofyan (Giwang Kanaka)',
+    repository: 'https://github.com/Giwang-Kanaka/windy-plugin-aqms-id.git',
     desktopUI: 'rhpane',
     mobileUI: 'fullscreen',
-    routerPath: '/my-plugin',
+    routerPath: '/aqms-id',
+    private: true
 };
 
 export default config;

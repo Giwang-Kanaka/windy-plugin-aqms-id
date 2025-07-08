@@ -2,7 +2,7 @@ import type { ExternalPluginConfig } from '@windy/interfaces';
 
 const config: ExternalPluginConfig = {
     name: 'windy-plugin-aqms-id',
-    version: '0.1.0',
+    version: '0.1.1',
     icon: '💨',
     title: 'Indonesia AQMS Stations',
     description: 'Windy.com plugin for AQMS stations in Indonesia',

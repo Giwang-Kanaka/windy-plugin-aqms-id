@@ -7,6 +7,30 @@
 <section class="plugin__content">
     <button class="back-btn" on:click={goBack}>Back</button>
     <h2>Indonesia AQMS Stations</h2>
+    <div
+        style="margin-bottom: 10px; display: flex; gap: 8px; flex-wrap: wrap; align-items: center;"
+    >
+        <input
+            type="text"
+            placeholder="Search by name or address..."
+            bind:value={searchQuery}
+            style="padding: 6px; border-radius: 4px; border: 1px solid #ccc; min-width: 180px;"
+        />
+        <select
+            bind:value={sortBy}
+            style="padding: 6px; border-radius: 4px; border: 1px solid #ccc;"
+        >
+            <option value="name">Sort by Name</option>
+            <option value="latest_aqi">Sort by AQI</option>
+            <option value="vendor__name">Sort by Vendor</option>
+        </select>
+        <button
+            on:click={() => (sortAsc = !sortAsc)}
+            style="padding: 6px 10px; border-radius: 4px; border: 1px solid #ccc; background: #f7f7f7; cursor: pointer;"
+        >
+            {sortAsc ? 'Asc' : 'Desc'}
+        </button>
+    </div>
     {#if loading}
         <p>Loading stations...</p>
     {:else if error}
@@ -15,12 +39,13 @@
         <p>No stations found.</p>
     {:else}
         <ul class="station-list">
-            {#each stations as station, i}
-                <li class="station-item" on:click={() => focusStation(i)}>
+            {#each stations as station}
+                <li class="station-item" on:click={() => focusStation(station.id)}>
                     <strong>{station.name}</strong><br />
                     <span>{station.address}</span><br />
+                    <span>Vendor: {station.vendor_name}</span><br />
                     AQI: <b>{station.aqi_value}</b> ({station.aqi_parameter})<br />
-                    <small>{station.timestamp}</small>
+                    <small>{formatTimestamp(station.timestamp)}</small>
                 </li>
             {/each}
         </ul>
@@ -40,15 +65,20 @@
         address: string;
         lat: number;
         lon: number;
+        vendor_name: string;
         aqi_value: number;
         aqi_parameter: string;
         timestamp: string;
     };
 
     let stations: Station[] = [];
+    let geojsonStations: Station[] = [];
     let markers: any[] = [];
     let loading = true;
     let error: string | null = null;
+    let searchQuery = '';
+    let sortBy: 'name' | 'latest_aqi' | 'vendor__name' = 'name';
+    let sortAsc = true;
 
     function getAqiColor(aqi: number): { bg: string; fg: string } {
         if (aqi >= 300) return { bg: 'black', fg: 'white' };
@@ -88,16 +118,14 @@
         });
     }
 
-    async function fetchStations() {
-        loading = true;
-        error = null;
+    // Fetch geojson stations for the map
+    async function fetchGeojsonStations() {
         try {
             const res = await fetch('https://api-klhk.aertrax.id/aqms/stations/geojson');
-            if (!res.ok) throw new Error('Failed to fetch data');
+            if (!res.ok) throw new Error('Failed to fetch geojson data');
             const resJson = await res.json();
             const features = resJson.data.features;
-
-            stations = features.map((feature: any) => {
+            geojsonStations = features.map((feature: any) => {
                 const props = feature.properties;
                 const coords = feature.geometry.coordinates;
                 return {
@@ -111,23 +139,36 @@
                     timestamp: props.latest_aqi?.timestamp ?? '',
                 };
             });
+        } catch (e) {
+            // Optionally handle geojson error
+        }
+    }
 
-            // Remove old markers
-            removeMarkers();
-
-            markers = stations.map(station => {
-                const popupHtml = `<b>${station.name}</b><br>${station.address}<br>AQI: <b>${station.aqi_value}</b> (${station.aqi_parameter})<br><small>${station.timestamp}</small>`;
-                return new L.Marker([station.lat, station.lon], {
-                    icon: createAqiIcon(station.aqi_value),
-                })
-                    .addTo(map)
-                    .bindPopup(popupHtml);
-            });
-
-            if (markers.length > 0) {
-                const group = new L.featureGroup(markers);
-                map.fitBounds(group.getBounds());
-            }
+    // Fetch stations for the list (search/sort)
+    async function fetchStations() {
+        loading = true;
+        error = null;
+        try {
+            // Build query params for search and sort
+            const params = new URLSearchParams();
+            if (searchQuery.trim()) params.append('search', searchQuery.trim());
+            // sort param: prefix with '-' if descending
+            if (sortBy) params.append('sort', sortAsc ? sortBy : `-${sortBy}`);
+            const url = `https://api-klhk.aertrax.id/aqms/stations?${params.toString()}`;
+            const res = await fetch(url);
+            if (!res.ok) throw new Error('Failed to fetch data');
+            const resJson = await res.json();
+            stations = resJson.data.map((station: any) => ({
+                id: station.id,
+                name: station.name || 'Unnamed Station',
+                address: station.address || '',
+                lat: station.location?.coordinates?.[1],
+                lon: station.location?.coordinates?.[0],
+                vendor_name: station.vendor?.name || '',
+                aqi_value: station.latest_aqi?.aqi_value ?? 0,
+                aqi_parameter: station.latest_aqi?.aqi_parameter ?? '',
+                timestamp: station.latest_aqi?.timestamp ?? '',
+            }));
         } catch (e) {
             error = e.message || 'Unknown error';
         } finally {
@@ -135,10 +176,42 @@
         }
     }
 
-    function focusStation(index: number) {
-        const station = stations[index];
-        map.setView([station.lat, station.lon], 12);
-        markers[index].openPopup();
+    // Set up map markers from geojsonStations
+    $: if (geojsonStations.length) {
+        removeMarkers();
+        markers = geojsonStations.map(station => {
+            const popupHtml = `
+                <div class="custom-popup">
+                    <div class="popup-time">${formatTimestamp(station.timestamp)}</div>
+                    <hr class="popup-divider" />
+                    <div class="popup-row"><span class="popup-label">ID:</span><span class="popup-value">${station.id}</span></div>
+                    <div class="popup-row"><span class="popup-label">Nama Stasiun:</span><span class="popup-value popup-bold">${station.name}</span></div>
+                    <div class="popup-row"><span class="popup-label">Nilai ISPU:</span><span class="popup-value"><span class="popup-aqi-badge">${station.aqi_value}</span></span></div>
+                    <div class="popup-row"><span class="popup-label">Alamat Stasiun:</span><span class="popup-value popup-address">${station.address}</span></div>
+                    <div class="popup-row"><span class="popup-label">Status Stasiun:</span><span class="popup-value"><span class="popup-status-dot"></span><span class="popup-status-active">Active</span></span></div>
+                    <button class="popup-detail-btn" onclick="window.open('https://klhk.aertrax.id/stations/${station.id}', '_blank', 'noopener')">Lihat Detail</button>
+                </div>
+            `;
+            return new L.Marker([station.lat, station.lon], {
+                icon: createAqiIcon(station.aqi_value),
+            })
+                .addTo(map)
+                .bindPopup(popupHtml);
+        });
+        if (markers.length > 0) {
+            const group = new L.featureGroup(markers);
+            map.fitBounds(group.getBounds());
+        }
+    }
+
+    function focusStation(id: string) {
+        // Find the geojson station and marker by id
+        const idx = geojsonStations.findIndex(s => s.id === id);
+        if (idx !== -1) {
+            const station = geojsonStations[idx];
+            map.setView([station.lat, station.lon], 12);
+            markers[idx]?.openPopup();
+        }
     }
 
     function removeMarkers() {
@@ -150,7 +223,9 @@
         bcast.emit('rqstOpen', 'menu');
     }
 
+    // Fetch geojson stations once on open
     export const onopen = () => {
+        fetchGeojsonStations();
         fetchStations();
     };
 
@@ -158,6 +233,42 @@
     onDestroy(() => {
         removeMarkers();
     });
+
+    // Fetch stations whenever searchQuery, sortBy, or sortAsc change
+    $: ([searchQuery, sortBy, sortAsc], fetchStations());
+
+    // Add a helper to format timestamp
+    function formatTimestamp(ts: string): string {
+        if (!ts) return '';
+        const date = new Date(ts);
+        if (isNaN(date.getTime())) return ts;
+        // Determine Indonesian time zone
+        const offset = -date.getTimezoneOffset() / 60; // user's local offset in hours
+        let tz = '';
+        if (offset === 7) tz = 'WIB';
+        else if (offset === 8) tz = 'WITA';
+        else if (offset === 9) tz = 'WIT';
+        const months = [
+            'Jan',
+            'Feb',
+            'Mar',
+            'Apr',
+            'May',
+            'Jun',
+            'Jul',
+            'Aug',
+            'Sep',
+            'Oct',
+            'Nov',
+            'Dec',
+        ];
+        const day = date.getDate().toString().padStart(2, '0');
+        const month = months[date.getMonth()];
+        const year = date.getFullYear();
+        const hour = date.getHours().toString().padStart(2, '0');
+        const min = date.getMinutes().toString().padStart(2, '0');
+        return `${day} ${month} ${year}, ${hour}:${min}${tz ? ' ' + tz : ''}`;
+    }
 </script>
 
 <style>
@@ -211,5 +322,114 @@
         padding: 0;
         overflow: hidden;
         aspect-ratio: 1 / 1;
+    }
+    .see-detail-btn {
+        display: inline-block;
+        margin-top: 8px;
+        padding: 6px 16px;
+        background: #009688;
+        color: #fff;
+        border-radius: 4px;
+        border: none;
+        cursor: pointer;
+        font-weight: bold;
+        font-size: 14px;
+        transition: background 0.2s;
+    }
+    .see-detail-btn:hover {
+        background: #00796b;
+    }
+    .custom-popup {
+        font-family: inherit;
+        min-width: 260px;
+        max-width: 320px;
+        color: #fff;
+        background: rgba(40, 40, 40, 0.95);
+        border-radius: 18px;
+        padding: 18px 18px 12px 18px;
+        box-sizing: border-box;
+    }
+    .popup-time {
+        font-size: 18px;
+        font-weight: 500;
+        margin-bottom: 8px;
+        letter-spacing: 1px;
+    }
+    .popup-divider {
+        border: none;
+        border-top: 1px solid #888;
+        margin: 8px 0 12px 0;
+    }
+    .popup-row {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+        margin-bottom: 10px;
+        font-size: 16px;
+    }
+    .popup-label {
+        font-weight: 500;
+        color: #fff;
+        min-width: 120px;
+        text-align: left;
+    }
+    .popup-value {
+        text-align: right;
+        color: #bfc9d1;
+        max-width: 160px;
+        word-break: break-word;
+    }
+    .popup-bold {
+        font-weight: bold;
+        color: #fff;
+    }
+    .popup-aqi-badge {
+        display: inline-block;
+        background: #3a3be0;
+        color: #fff;
+        border-radius: 16px;
+        padding: 2px 16px;
+        font-size: 18px;
+        font-weight: bold;
+        min-width: 36px;
+        text-align: center;
+    }
+    .popup-address {
+        color: #aab6c8;
+        font-size: 15px;
+    }
+    .popup-status-dot {
+        display: inline-block;
+        width: 12px;
+        height: 12px;
+        border-radius: 50%;
+        background: #00e676;
+        margin-right: 6px;
+        vertical-align: middle;
+    }
+    .popup-status-active {
+        color: #00e676;
+        font-weight: bold;
+        font-size: 16px;
+        vertical-align: middle;
+    }
+    .popup-detail-btn {
+        display: block;
+        width: 100%;
+        margin: 18px 0 0 0;
+        padding: 12px 0;
+        background: linear-gradient(90deg, #009688 0%, #008080 100%);
+        color: #fff;
+        border-radius: 10px;
+        border: none;
+        cursor: pointer;
+        font-weight: bold;
+        font-size: 20px;
+        letter-spacing: 1px;
+        transition: background 0.2s;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
+    }
+    .popup-detail-btn:hover {
+        background: linear-gradient(90deg, #00796b 0%, #006060 100%);
     }
 </style>
